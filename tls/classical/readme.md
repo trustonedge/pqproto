@@ -2,12 +2,6 @@
 
 A minimal but complete TLS 1.3 echo server and client implementation using OpenSSL 3.5.2.
 
-## Prerequisites
-
-- [OpenSSL 3.5.2](https://github.com/trustonedge/openssl-pqtls/blob/main/docs/openssl-installation.md)
-- GCC with C11 support
-- pkg-config (`sudo apt install pkg-config`) - for dynamic library path configuration
-
 ## Certificate Generation
 
 Before running the programs, generate the required certificates in the `certs/` directory:

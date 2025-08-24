@@ -1,34 +1,48 @@
+# -------------------------
 # Prerequisites
+# -------------------------
 *.d
 
+# -------------------------
 # Object files
+# -------------------------
 *.o
 *.ko
 *.obj
 *.elf
 
+# -------------------------
 # Linker output
+# -------------------------
 *.ilk
 *.map
 *.exp
 
+# -------------------------
 # Precompiled Headers
+# -------------------------
 *.gch
 *.pch
 
+# -------------------------
 # Libraries
+# -------------------------
 *.lib
 *.a
 *.la
 *.lo
 
+# -------------------------
 # Shared objects (inc. Windows DLLs)
+# -------------------------
 *.dll
 *.so
 *.so.*
 *.dylib
 
+# -------------------------
 # Executables
+# -------------------------
 *.exe
 *.out
 *.app
@@ -36,20 +50,23 @@
 *.x86_64
 *.hex
 
-# Debug files
-*.dSYM/
-*.su
-*.idb
-*.pdb
+# Default GCC/Clang output
+a.out
 
-# Kernel Module Compile Results
-*.mod*
-*.cmd
-.tmp_versions/
-modules.order
-Module.symvers
-Mkfile.old
-dkms.conf
+# Ignore executables with no extension (but keep source files with dots)
+*
+!*/
+!*.*
+!Makefile
+!makefile
 
-# debug information files
-*.dwo
+# -------------------------
+# IDE / Editor configs
+# -------------------------
+.vscode/
+*.code-workspace
+
+# -------------------------
+# Certificates / Keys
+# -------------------------
+*.pem
