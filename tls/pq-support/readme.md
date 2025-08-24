@@ -1,4 +1,4 @@
-# Post-Quantum TLS 1.3 Client-Server Example (Native)
+# Post-Quantum TLS 1.3 Client-Server Prototype
 
 A minimal but complete TLS 1.3 echo server and client implementation using **NIST-standardized post-quantum cryptographic algorithms** with OpenSSL 3.5.2.
 

@@ -1,4 +1,4 @@
-# TLS 1.3 Client-Server Example
+# TLS 1.3 Client-Server Prototype
 
 A minimal but complete TLS 1.3 echo server and client implementation using OpenSSL 3.5.2.
 
@@ -43,13 +43,6 @@ Build both programs using make:
 ```bash
 make
 ```
-
-The Makefile uses `pkg-config` to automatically detect OpenSSL library paths and compile flags, ensuring compatibility across different systems.
-
-This will create two executables:
-
-- `server` - TLS 1.3 echo server
-- `client` - TLS 1.3 client
 
 To clean build artifacts:
 
