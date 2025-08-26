@@ -35,7 +35,7 @@ void print_cert_info(SSL_CTX *ctx)
 {
     (void)ctx; // Avoid unused parameter warning
 
-    printf("\n=== Certificate & Key ===\n");
+    printf("\n=== Server Certificate & Key ===\n");
 
     // Load and print certificate algorithm info from file
     FILE *cert_file = fopen("./certs/server-cert.pem", "r");
@@ -56,7 +56,7 @@ void print_cert_info(SSL_CTX *ctx)
                     const char *long_name = OBJ_nid2ln(nid);
                     if (long_name)
                     {
-                        printf("Certificate algorithm: %s\n", long_name);
+                        printf("Server certificate algorithm: %s\n", long_name);
                     }
                 }
             }
@@ -65,7 +65,7 @@ void print_cert_info(SSL_CTX *ctx)
             if (cert_key)
             {
                 int key_size = EVP_PKEY_bits(cert_key);
-                printf("Certificate key size: %d bits\n", key_size);
+                printf("Server certificate key size: %d bits\n", key_size);
                 EVP_PKEY_free(cert_key);
             }
             X509_free(cert);
@@ -84,20 +84,78 @@ void print_cert_info(SSL_CTX *ctx)
             const char *type_name = EVP_PKEY_get0_type_name(pkey);
             if (type_name)
             {
-                printf("Private key algorithm: %s (%d bits)\n", type_name, key_size);
+                printf("Server private key algorithm: %s (%d bits)\n", type_name, key_size);
             }
             EVP_PKEY_free(pkey);
         }
         fclose(key_file);
     }
 
-    printf("==========================\n\n");
+    printf("==================================\n\n");
 }
 
-// Print TLS connection details
+// Print client certificate information
+void print_client_cert_info(SSL *ssl)
+{
+    printf("\n=== Client Certificate ===\n");
+
+    X509 *cert = SSL_get_peer_certificate(ssl);
+    if (!cert)
+    {
+        printf("No client certificate received\n");
+        printf("===========================\n\n");
+        return;
+    }
+
+    // Print subject name
+    char *subject = X509_NAME_oneline(X509_get_subject_name(cert), NULL, 0);
+    if (subject)
+    {
+        printf("Client subject: %s\n", subject);
+        OPENSSL_free(subject);
+    }
+
+    // Print issuer name
+    char *issuer = X509_NAME_oneline(X509_get_issuer_name(cert), NULL, 0);
+    if (issuer)
+    {
+        printf("Client issuer: %s\n", issuer);
+        OPENSSL_free(issuer);
+    }
+
+    // Get the exact algorithm name from certificate
+    X509_PUBKEY *pubkey = X509_get_X509_PUBKEY(cert);
+    if (pubkey)
+    {
+        ASN1_OBJECT *alg_obj;
+        X509_ALGOR *algor;
+        if (X509_PUBKEY_get0_param(&alg_obj, NULL, NULL, &algor, pubkey))
+        {
+            int nid = OBJ_obj2nid(alg_obj);
+            const char *long_name = OBJ_nid2ln(nid);
+            if (long_name)
+            {
+                printf("Client certificate algorithm: %s\n", long_name);
+            }
+        }
+    }
+
+    EVP_PKEY *pkey = X509_get_pubkey(cert);
+    if (pkey)
+    {
+        int key_size = EVP_PKEY_bits(pkey);
+        printf("Client certificate key size: %d bits\n", key_size);
+        EVP_PKEY_free(pkey);
+    }
+
+    X509_free(cert);
+    printf("===========================\n\n");
+}
+
+// Print TLS connection details for post-quantum mTLS analysis
 void print_tls_connection_info(SSL *ssl)
 {
-    printf("\n=== TLS Connection ===\n");
+    printf("\n=== Post-Quantum mTLS Connection ===\n");
 
     const char *version = SSL_get_version(ssl);
     printf("TLS version: %s\n", version);
@@ -105,7 +163,7 @@ void print_tls_connection_info(SSL *ssl)
     const SSL_CIPHER *cipher = SSL_get_current_cipher(ssl);
     printf("Cipher suite: %s\n", SSL_CIPHER_get_name(cipher));
 
-    // Key exchange group
+    // Key exchange group (ML-KEM for post-quantum)
     const char *group_name = SSL_get0_group_name(ssl);
     int group_nid = SSL_get_negotiated_group(ssl);
 
@@ -133,11 +191,47 @@ void print_tls_connection_info(SSL *ssl)
         printf("Server signature: %s\n", local_sig_name);
     }
 
-    printf("======================\n\n");
+    // Client signature algorithm (from client certificate)
+    const char *peer_sig_name = NULL;
+    if (SSL_get0_peer_signature_name(ssl, &peer_sig_name) && peer_sig_name)
+    {
+        printf("Client signature: %s\n", peer_sig_name);
+    }
+
+    printf("=====================================\n\n");
 }
 
-// Initialize OpenSSL and create SSL context
-SSL_CTX *create_ssl_context()
+// Client certificate verification callback
+int verify_client_callback(int preverify_ok, X509_STORE_CTX *ctx)
+{
+    X509 *cert = X509_STORE_CTX_get_current_cert(ctx);
+    int err = X509_STORE_CTX_get_error(ctx);
+    int depth = X509_STORE_CTX_get_error_depth(ctx);
+
+    printf("Certificate verification: depth=%d, preverify_ok=%d\n", depth, preverify_ok);
+
+    if (!preverify_ok)
+    {
+        printf("Certificate verification failed: %s\n", X509_verify_cert_error_string(err));
+
+        if (cert)
+        {
+            char *subject = X509_NAME_oneline(X509_get_subject_name(cert), NULL, 0);
+            if (subject)
+            {
+                printf("Certificate subject: %s\n", subject);
+                OPENSSL_free(subject);
+            }
+        }
+        return 0; // Reject certificate
+    }
+
+    printf("Certificate verification successful\n");
+    return 1; // Accept certificate
+}
+
+// Initialize OpenSSL and create SSL context for post-quantum mTLS
+SSL_CTX *create_pq_mtls_ssl_context()
 {
     SSL_CTX *ctx;
 
@@ -157,7 +251,7 @@ SSL_CTX *create_ssl_context()
         return NULL;
     }
 
-    // Enforce TLS 1.3 only
+    // Enforce TLS 1.3 only (required for post-quantum algorithms)
     if (SSL_CTX_set_min_proto_version(ctx, TLS1_3_VERSION) != 1)
     {
         fprintf(stderr, "Failed to set minimum TLS version\n");
@@ -174,25 +268,53 @@ SSL_CTX *create_ssl_context()
         return NULL;
     }
 
-    // Configure classical-only key exchange groups (no post-quantum)
-    const char *classical_groups = "X25519:X448:secp256r1:secp384r1:secp521r1";
-    if (SSL_CTX_set1_groups_list(ctx, classical_groups) != 1)
+    printf("SSL context created with TLS 1.3 enforcement (required for post-quantum mTLS)\n");
+    return ctx;
+}
+
+// Set post-quantum specific SSL context options for mTLS server
+int configure_pq_mtls_context(SSL_CTX *ctx)
+{
+    // Enable post-quantum signature algorithms
+    // Note: These are the NIST standardized post-quantum algorithms
+    const char *pq_sigalgs = "ML-DSA-44:ML-DSA-65:ML-DSA-87:"
+                             // SLH-DSA algorithms currently not supported for TLS signature configuration
+                             // Uncomment the following line when SLH-DSA support is added to OpenSSL TLS
+                             // "SLH-DSA-SHA2-128s:SLH-DSA-SHA2-128f:SLH-DSA-SHA2-192s:SLH-DSA-SHA2-192f:"
+                             // "SLH-DSA-SHA2-256s:SLH-DSA-SHA2-256f:SLH-DSA-SHAKE-128s:SLH-DSA-SHAKE-128f:"
+                             "ECDSA+SHA256:ECDSA+SHA384:RSA+SHA256";
+
+    if (SSL_CTX_set1_sigalgs_list(ctx, pq_sigalgs) != 1)
     {
-        printf("Warning: Could not set classical groups list\n");
+        printf("Warning: Could not set post-quantum signature algorithms list\n");
         ERR_print_errors_fp(stderr);
         // Continue anyway as this is not always fatal
     }
     else
     {
-        printf("Key exchange groups configured (X25519, ECDH)\n");
+        printf("Post-quantum signature algorithms configured for mTLS server\n");
     }
 
-    printf("SSL context created with TLS 1.3 enforcement\n");
-    return ctx;
+    // Configure supported groups (key exchange algorithms)
+    const char *pq_groups = "MLKEM768:MLKEM1024:MLKEM512:X25519:X448:secp256r1:secp384r1"
+                            "X25519MLKEM768:SecP256r1MLKEM768:SecP384r1MLKEM1024:";
+
+    if (SSL_CTX_set1_groups_list(ctx, pq_groups) != 1)
+    {
+        printf("Warning: Could not set post-quantum groups list\n");
+        ERR_print_errors_fp(stderr);
+        // Continue anyway as this is not always fatal
+    }
+    else
+    {
+        printf("Post-quantum key exchange groups configured for mTLS server\n");
+    }
+
+    return 0;
 }
 
-// Load certificate and private key
-int load_certificates(SSL_CTX *ctx)
+// Load server certificate, private key, and configure client certificate verification for post-quantum mTLS
+int load_pq_mtls_certificates(SSL_CTX *ctx)
 {
     // Load server certificate
     if (SSL_CTX_use_certificate_file(ctx, "./certs/server-cert.pem", SSL_FILETYPE_PEM) != 1)
@@ -219,7 +341,20 @@ int load_certificates(SSL_CTX *ctx)
         ERR_print_errors_fp(stderr);
         return -1;
     }
-    printf("Certificate and private key match verified\n");
+    printf("Server certificate and private key match verified\n");
+
+    // Load CA certificate for client verification
+    if (SSL_CTX_load_verify_locations(ctx, "./certs/ca-cert.pem", NULL) != 1)
+    {
+        fprintf(stderr, "Failed to load CA certificate for client verification\n");
+        ERR_print_errors_fp(stderr);
+        return -1;
+    }
+    printf("CA certificate loaded for client verification\n");
+
+    // Enable client certificate verification (post-quantum mutual TLS)
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, verify_client_callback);
+    printf("Client certificate verification enabled (post-quantum mutual TLS)\n");
 
     // Print certificate and key information
     print_cert_info(ctx);
@@ -271,12 +406,12 @@ int create_server_socket(int port)
         return -1;
     }
 
-    printf("TLS server listening on port %d\n", port);
+    printf("Post-quantum mTLS server listening on port %d\n", port);
     return sockfd;
 }
 
-// Handle client connection
-void handle_client(int client_fd, SSL_CTX *ctx)
+// Handle client connection with post-quantum mTLS
+void handle_pq_mtls_client(int client_fd, SSL_CTX *ctx)
 {
     SSL *ssl;
     char buffer[BUFFER_SIZE];
@@ -301,23 +436,26 @@ void handle_client(int client_fd, SSL_CTX *ctx)
     }
 
     // Perform TLS handshake
-    printf("Starting TLS handshake...\n");
+    printf("Starting post-quantum mTLS handshake...\n");
     int result = SSL_accept(ssl);
     if (result != 1)
     {
         int ssl_error = SSL_get_error(ssl, result);
-        fprintf(stderr, "TLS handshake failed (error: %d)\n", ssl_error);
+        fprintf(stderr, "Post-quantum mTLS handshake failed (error: %d)\n", ssl_error);
         ERR_print_errors_fp(stderr);
         SSL_free(ssl);
         return;
     }
-    printf("TLS handshake successful\n");
+    printf("Post-quantum mTLS handshake successful\n");
 
-    // Print classical TLS connection details
+    // Print post-quantum mTLS connection details
     print_tls_connection_info(ssl);
 
+    // Print client certificate information
+    print_client_cert_info(ssl);
+
     // Echo loop
-    printf("Client connected. Starting echo service...\n");
+    printf("Client connected with post-quantum mTLS. Starting echo service...\n");
     while (server_running)
     {
         bytes = SSL_read(ssl, buffer, sizeof(buffer) - 1);
@@ -416,20 +554,27 @@ int main(int argc, char *argv[])
         }
     }
 
-    printf("=== TLS 1.3 Echo Server ===\n\n");
+    printf("=== Post-Quantum mTLS 1.3 Echo Server ===\n\n");
 
     // Install signal handler
     signal(SIGINT, sigint_handler);
 
     // Create SSL context
-    ctx = create_ssl_context();
+    ctx = create_pq_mtls_ssl_context();
     if (!ctx)
     {
         return 1;
     }
 
+    // Configure post-quantum specific options
+    if (configure_pq_mtls_context(ctx) != 0)
+    {
+        SSL_CTX_free(ctx);
+        return 1;
+    }
+
     // Load certificates
-    if (load_certificates(ctx) != 0)
+    if (load_pq_mtls_certificates(ctx) != 0)
     {
         SSL_CTX_free(ctx);
         return 1;
@@ -443,7 +588,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    printf("TLS 1.3 server ready. Press Ctrl+C to stop.\n");
+    printf("Post-quantum mTLS 1.3 server ready. Press Ctrl+C to stop.\n");
 
     // Accept connections
     while (server_running)
@@ -462,8 +607,8 @@ int main(int argc, char *argv[])
                inet_ntoa(client_addr.sin_addr),
                ntohs(client_addr.sin_port));
 
-        // Handle client (blocking, one at a time as requested)
-        handle_client(client_fd, ctx);
+        // Handle client (blocking, one at a time)
+        handle_pq_mtls_client(client_fd, ctx);
         close(client_fd);
 
         printf("Connection closed\n");

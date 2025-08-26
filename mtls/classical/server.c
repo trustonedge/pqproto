@@ -35,7 +35,7 @@ void print_cert_info(SSL_CTX *ctx)
 {
     (void)ctx; // Avoid unused parameter warning
 
-    printf("\n=== Certificate & Key ===\n");
+    printf("\n=== Server Certificate & Key ===\n");
 
     // Load and print certificate algorithm info from file
     FILE *cert_file = fopen("./certs/server-cert.pem", "r");
@@ -56,7 +56,7 @@ void print_cert_info(SSL_CTX *ctx)
                     const char *long_name = OBJ_nid2ln(nid);
                     if (long_name)
                     {
-                        printf("Certificate algorithm: %s\n", long_name);
+                        printf("Server certificate algorithm: %s\n", long_name);
                     }
                 }
             }
@@ -65,7 +65,7 @@ void print_cert_info(SSL_CTX *ctx)
             if (cert_key)
             {
                 int key_size = EVP_PKEY_bits(cert_key);
-                printf("Certificate key size: %d bits\n", key_size);
+                printf("Server certificate key size: %d bits\n", key_size);
                 EVP_PKEY_free(cert_key);
             }
             X509_free(cert);
@@ -84,20 +84,78 @@ void print_cert_info(SSL_CTX *ctx)
             const char *type_name = EVP_PKEY_get0_type_name(pkey);
             if (type_name)
             {
-                printf("Private key algorithm: %s (%d bits)\n", type_name, key_size);
+                printf("Server private key algorithm: %s (%d bits)\n", type_name, key_size);
             }
             EVP_PKEY_free(pkey);
         }
         fclose(key_file);
     }
 
-    printf("==========================\n\n");
+    printf("==================================\n\n");
+}
+
+// Print client certificate information
+void print_client_cert_info(SSL *ssl)
+{
+    printf("\n=== Client Certificate ===\n");
+
+    X509 *cert = SSL_get_peer_certificate(ssl);
+    if (!cert)
+    {
+        printf("No client certificate received\n");
+        printf("===========================\n\n");
+        return;
+    }
+
+    // Print subject name
+    char *subject = X509_NAME_oneline(X509_get_subject_name(cert), NULL, 0);
+    if (subject)
+    {
+        printf("Client subject: %s\n", subject);
+        OPENSSL_free(subject);
+    }
+
+    // Print issuer name
+    char *issuer = X509_NAME_oneline(X509_get_issuer_name(cert), NULL, 0);
+    if (issuer)
+    {
+        printf("Client issuer: %s\n", issuer);
+        OPENSSL_free(issuer);
+    }
+
+    // Get the exact algorithm name from certificate
+    X509_PUBKEY *pubkey = X509_get_X509_PUBKEY(cert);
+    if (pubkey)
+    {
+        ASN1_OBJECT *alg_obj;
+        X509_ALGOR *algor;
+        if (X509_PUBKEY_get0_param(&alg_obj, NULL, NULL, &algor, pubkey))
+        {
+            int nid = OBJ_obj2nid(alg_obj);
+            const char *long_name = OBJ_nid2ln(nid);
+            if (long_name)
+            {
+                printf("Client certificate algorithm: %s\n", long_name);
+            }
+        }
+    }
+
+    EVP_PKEY *pkey = X509_get_pubkey(cert);
+    if (pkey)
+    {
+        int key_size = EVP_PKEY_bits(pkey);
+        printf("Client certificate key size: %d bits\n", key_size);
+        EVP_PKEY_free(pkey);
+    }
+
+    X509_free(cert);
+    printf("===========================\n\n");
 }
 
 // Print TLS connection details
 void print_tls_connection_info(SSL *ssl)
 {
-    printf("\n=== TLS Connection ===\n");
+    printf("\n=== mTLS Connection ===\n");
 
     const char *version = SSL_get_version(ssl);
     printf("TLS version: %s\n", version);
@@ -133,7 +191,43 @@ void print_tls_connection_info(SSL *ssl)
         printf("Server signature: %s\n", local_sig_name);
     }
 
-    printf("======================\n\n");
+    // Client signature algorithm (from client certificate)
+    const char *peer_sig_name = NULL;
+    if (SSL_get0_peer_signature_name(ssl, &peer_sig_name) && peer_sig_name)
+    {
+        printf("Client signature: %s\n", peer_sig_name);
+    }
+
+    printf("========================\n\n");
+}
+
+// Client certificate verification callback
+int verify_client_callback(int preverify_ok, X509_STORE_CTX *ctx)
+{
+    X509 *cert = X509_STORE_CTX_get_current_cert(ctx);
+    int err = X509_STORE_CTX_get_error(ctx);
+    int depth = X509_STORE_CTX_get_error_depth(ctx);
+
+    printf("Certificate verification: depth=%d, preverify_ok=%d\n", depth, preverify_ok);
+
+    if (!preverify_ok)
+    {
+        printf("Certificate verification failed: %s\n", X509_verify_cert_error_string(err));
+        
+        if (cert)
+        {
+            char *subject = X509_NAME_oneline(X509_get_subject_name(cert), NULL, 0);
+            if (subject)
+            {
+                printf("Certificate subject: %s\n", subject);
+                OPENSSL_free(subject);
+            }
+        }
+        return 0; // Reject certificate
+    }
+
+    printf("Certificate verification successful\n");
+    return 1; // Accept certificate
 }
 
 // Initialize OpenSSL and create SSL context
@@ -191,7 +285,7 @@ SSL_CTX *create_ssl_context()
     return ctx;
 }
 
-// Load certificate and private key
+// Load server certificate, private key, and configure client certificate verification
 int load_certificates(SSL_CTX *ctx)
 {
     // Load server certificate
@@ -219,7 +313,20 @@ int load_certificates(SSL_CTX *ctx)
         ERR_print_errors_fp(stderr);
         return -1;
     }
-    printf("Certificate and private key match verified\n");
+    printf("Server certificate and private key match verified\n");
+
+    // Load CA certificate for client verification
+    if (SSL_CTX_load_verify_locations(ctx, "./certs/ca-cert.pem", NULL) != 1)
+    {
+        fprintf(stderr, "Failed to load CA certificate for client verification\n");
+        ERR_print_errors_fp(stderr);
+        return -1;
+    }
+    printf("CA certificate loaded for client verification\n");
+
+    // Enable client certificate verification (mutual TLS)
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, verify_client_callback);
+    printf("Client certificate verification enabled (mutual TLS)\n");
 
     // Print certificate and key information
     print_cert_info(ctx);
@@ -271,7 +378,7 @@ int create_server_socket(int port)
         return -1;
     }
 
-    printf("TLS server listening on port %d\n", port);
+    printf("mTLS server listening on port %d\n", port);
     return sockfd;
 }
 
@@ -301,23 +408,26 @@ void handle_client(int client_fd, SSL_CTX *ctx)
     }
 
     // Perform TLS handshake
-    printf("Starting TLS handshake...\n");
+    printf("Starting mTLS handshake...\n");
     int result = SSL_accept(ssl);
     if (result != 1)
     {
         int ssl_error = SSL_get_error(ssl, result);
-        fprintf(stderr, "TLS handshake failed (error: %d)\n", ssl_error);
+        fprintf(stderr, "mTLS handshake failed (error: %d)\n", ssl_error);
         ERR_print_errors_fp(stderr);
         SSL_free(ssl);
         return;
     }
-    printf("TLS handshake successful\n");
+    printf("mTLS handshake successful\n");
 
-    // Print classical TLS connection details
+    // Print mTLS connection details
     print_tls_connection_info(ssl);
 
+    // Print client certificate information
+    print_client_cert_info(ssl);
+
     // Echo loop
-    printf("Client connected. Starting echo service...\n");
+    printf("Client connected with mTLS. Starting echo service...\n");
     while (server_running)
     {
         bytes = SSL_read(ssl, buffer, sizeof(buffer) - 1);
@@ -416,7 +526,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    printf("=== TLS 1.3 Echo Server ===\n\n");
+    printf("=== mTLS 1.3 Echo Server ===\n\n");
 
     // Install signal handler
     signal(SIGINT, sigint_handler);
@@ -443,7 +553,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    printf("TLS 1.3 server ready. Press Ctrl+C to stop.\n");
+    printf("mTLS 1.3 server ready. Press Ctrl+C to stop.\n");
 
     // Accept connections
     while (server_running)
@@ -462,7 +572,7 @@ int main(int argc, char *argv[])
                inet_ntoa(client_addr.sin_addr),
                ntohs(client_addr.sin_port));
 
-        // Handle client (blocking, one at a time as requested)
+        // Handle client (blocking, one at a time)
         handle_client(client_fd, ctx);
         close(client_fd);
 

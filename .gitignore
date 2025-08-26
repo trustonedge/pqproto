@@ -70,3 +70,5 @@ a.out
 # Certificates / Keys
 # -------------------------
 *.pem
+*.srl
+*.csr
