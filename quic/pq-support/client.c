@@ -13,7 +13,7 @@
 #include <openssl/quic.h>
 #include <openssl/bio.h>
 
-#define DEFAULT_PORT 4433
+#define DEFAULT_PORT 5433
 #define BUFFER_SIZE 1024
 
 // Print QUIC connection details
@@ -58,7 +58,7 @@ void print_quic_connection_info(SSL *ssl)
         printf("Peer signature algorithm: %s\n", peer_sig_name);
     }
 
-    printf("========================\n");
+    printf("======================\n");
 }
 
 // Enhanced function to print server certificate algorithm information
@@ -140,23 +140,24 @@ SSL_CTX *create_quic_context()
         return NULL;
     }
 
-    // Configure classical-only key exchange groups (no post-quantum)
-    const char *classical_groups = "X25519:X448:secp256r1:secp384r1:secp521r1";
-    if (SSL_CTX_set1_groups_list(ctx, classical_groups) != 1)
+    // Configure supported groups (key exchange algorithms) with preference for post-quantum
+    const char *pq_groups = "X25519MLKEM768:SecP256r1MLKEM768:SecP384r1MLKEM1024:"
+                            "MLKEM768:MLKEM1024:MLKEM512:X25519:X448:secp256r1:secp384r1";
+
+    if (SSL_CTX_set1_groups_list(ctx, pq_groups) != 1)
     {
-        printf("Warning: Could not set classical groups list\n");
+        printf("Warning: Could not set post-quantum groups list\n");
         ERR_print_errors_fp(stderr);
         // Continue anyway as this is not always fatal
     }
     else
     {
-        printf("QUIC key exchange groups configured (X25519, ECDH)\n");
+        printf("Post-quantum key exchange groups configured for client\n");
     }
 
     // Note: ALPN will be set per-connection in main(), not at context level
     // This allows for more flexible per-connection protocol negotiation
     printf("ALPN will be configured per-connection (demo: http/1.0)\n");
-
     printf("QUIC SSL context created successfully\n");
     return ctx;
 }
@@ -376,7 +377,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    printf("=== QUIC Classical Client ===\n\n");
+    printf("=== Post-Quantum QUIC Client ===\n\n");
 
     // Create QUIC SSL context
     ctx = create_quic_context();
