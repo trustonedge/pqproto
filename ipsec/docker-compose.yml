@@ -1,0 +1,85 @@
+# IPSec VPN Setup with Mode and Authentication Method Switching Support
+# Usage:
+#   Classical Mode with Certs:  docker compose up -d
+#   Classical Mode with PSK:    AUTH_METHOD=psk docker compose up -d
+#   PQ Mode with PSK:          IPSEC_MODE=pq-support AUTH_METHOD=psk docker compose up -d
+#   PQ Mode with Certs:        IPSEC_MODE=pq-support AUTH_METHOD=certs docker compose up -d
+
+services:
+  ipsec-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+      args:
+        IPSEC_MODE: ${IPSEC_MODE:-classical}
+        AUTH_METHOD: ${AUTH_METHOD:-certs}
+        OPENSSL_VERSION: ${OPENSSL_VERSION:-3.5.3}
+    container_name: ipsec-server
+    hostname: ipsec-server
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    networks:
+      ipsec-net:
+        ipv4_address: 172.21.0.10
+    ports:
+      - "8080:8080"
+    volumes:
+      - /lib/modules:/lib/modules:ro
+    environment:
+      - IPSEC_MODE=${IPSEC_MODE:-classical}
+      - AUTH_METHOD=${AUTH_METHOD:-certs}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "swanctl --list-conns | grep -q 'corporate-vpn' && pgrep charon-systemd > /dev/null",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  ipsec-client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+      args:
+        IPSEC_MODE: ${IPSEC_MODE:-classical}
+        AUTH_METHOD: ${AUTH_METHOD:-certs}
+        OPENSSL_VERSION: ${OPENSSL_VERSION:-3.5.3}
+    container_name: ipsec-client
+    hostname: ipsec-client
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    networks:
+      ipsec-net:
+        ipv4_address: 172.21.0.20
+    depends_on:
+      ipsec-server:
+        condition: service_healthy
+    volumes:
+      - /lib/modules:/lib/modules:ro
+    environment:
+      - IPSEC_MODE=${IPSEC_MODE:-classical}
+      - AUTH_METHOD=${AUTH_METHOD:-certs}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "swanctl --list-conns | grep -q 'connect-to-corporate' && pgrep charon-systemd > /dev/null",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  ipsec-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24

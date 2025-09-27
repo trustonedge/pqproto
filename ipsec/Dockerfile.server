@@ -1,0 +1,186 @@
+# StrongSwan 6.0.2 IPsec Server Container with OpenSSL 3.5.3 and Mode Switching
+FROM ubuntu:22.04
+
+# Build arguments for mode switching
+ARG IPSEC_MODE=classical
+ARG AUTH_METHOD=certs
+ARG OPENSSL_VERSION=3.5.3
+
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build dependencies and required packages
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    wget \
+    curl \
+    autoconf \
+    automake \
+    libtool \
+    pkg-config \
+    gettext \
+    bison \
+    iputils-ping \
+    time \
+    flex \
+    gperf \
+    libgmp-dev \
+    libcurl4-openssl-dev \
+    libsystemd-dev \
+    libpam0g-dev \
+    libldap2-dev \
+    libsqlite3-dev \
+    libmysqlclient-dev \
+    libpq-dev \
+    libxml2-dev \
+    libjson-c-dev \
+    libcap-dev \
+    libiptc-dev \
+    libnm-dev \
+    libxtables-dev \
+    libip4tc-dev \
+    libip6tc-dev \
+    libnetfilter-conntrack-dev \
+    iproute2 \
+    iputils-ping \
+    net-tools \
+    tcpdump \
+    python3 \
+    vim \
+    checkinstall \
+    zlib1g-dev \
+    perl-modules-5.34 \
+    perl-doc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build and install OpenSSL 3.5.3 with Post-Quantum support
+WORKDIR /tmp/openssl-build
+RUN wget https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz && \
+    tar -xzf openssl-${OPENSSL_VERSION}.tar.gz && \
+    cd openssl-${OPENSSL_VERSION} && \
+    ./config --prefix=/usr/local --openssldir=/usr/local/ssl && \
+    make -j$(nproc) && \
+    make install && \
+    ldconfig && \
+    cd / && \
+    rm -rf /tmp/openssl-build
+
+# Update PATH and library path for OpenSSL 3.5.3
+ENV PATH="/usr/local/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/lib64:/usr/local/lib:${LD_LIBRARY_PATH}"
+ENV PKG_CONFIG_PATH="/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH}"
+
+# Build StrongSwan 6.0.2 from source with OpenSSL 3.5.3 support
+WORKDIR /tmp
+RUN wget --no-check-certificate https://download.strongswan.org/strongswan-6.0.2.tar.bz2 && \
+    tar xjf strongswan-6.0.2.tar.bz2 && \
+    cd strongswan-6.0.2 && \
+    PKG_CONFIG_PATH="/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig" \
+    CPPFLAGS="-I/usr/local/include" \
+    LDFLAGS="-L/usr/local/lib64 -L/usr/local/lib" \
+    ./configure \
+        --prefix=/usr \
+        --sysconfdir=/etc \
+        --localstatedir=/var \
+        --runstatedir=/var/run \
+        --with-systemdsystemunitdir=/lib/systemd/system \
+        --disable-defaults \
+        --enable-silent-rules \
+        --enable-charon \
+        --enable-systemd \
+        --enable-ikev2 \
+        --enable-vici \
+        --enable-swanctl \
+        --enable-nonce \
+        --enable-random \
+        --enable-drbg \
+        --enable-openssl \
+        --with-openssl-dir=/usr/local \
+        --disable-gcrypt \
+        --enable-curl \
+        --enable-pem \
+        --enable-x509 \
+        --enable-constraints \
+        --enable-revocation \
+        --enable-pki \
+        --enable-pubkey \
+        --enable-socket-default \
+        --enable-kernel-netlink \
+        --enable-resolve \
+        --enable-eap-identity \
+        --enable-eap-md5 \
+        --enable-eap-dynamic \
+        --enable-eap-tls \
+        --enable-updown \
+        --enable-sha2 \
+        --enable-pkcs11 \
+        --enable-hmac \
+        --enable-gcm \
+        --enable-mgf1 \
+        --enable-aes \
+        --enable-des \
+        --enable-sha1 \
+        --enable-md5 \
+        --enable-gmp \
+        --enable-stroke && \
+    make -j$(nproc) && \
+    make install && \
+    ldconfig && \
+    cd / && \
+    rm -rf /tmp/strongswan-*
+
+# Create required directories for swanctl
+RUN mkdir -p /etc/swanctl/conf.d \
+             /etc/swanctl/x509ca \
+             /etc/swanctl/x509 \
+             /etc/swanctl/private \
+             /etc/swanctl/rsa \
+             /etc/swanctl/ecdsa \
+             /etc/swanctl/pkcs8 \
+             /etc/swanctl/pkcs12 \
+             /etc/swanctl/pubkey
+
+# Set proper permissions
+RUN chmod 700 /etc/swanctl/private /etc/swanctl/rsa /etc/swanctl/ecdsa /etc/swanctl/pkcs8 /etc/swanctl/pkcs12
+RUN chown -R root:root /etc/swanctl
+
+# Copy certificates only for certs auth method
+RUN if [ "${AUTH_METHOD}" = "certs" ]; then mkdir -p /tmp/pki; fi
+COPY ${IPSEC_MODE}/pki /tmp/pki/
+RUN if [ "${AUTH_METHOD}" = "certs" ]; then \
+        cp /tmp/pki/cacerts/ca-cert.pem /etc/swanctl/x509ca/ && \
+        cp /tmp/pki/certs/server-cert.pem /etc/swanctl/x509/ && \
+        cp /tmp/pki/private/server-key.pem /etc/swanctl/private/ && \
+        cp /tmp/pki/certs/client-cert.pem /etc/swanctl/x509/ && \
+        cp /tmp/pki/private/client-key.pem /etc/swanctl/private/; \
+    fi && rm -rf /tmp/pki
+
+# Copy auth-method specific configuration
+COPY ${IPSEC_MODE}/conf/${AUTH_METHOD}/server.conf /etc/swanctl/swanctl.conf
+
+# Copy secrets file for PSK auth method
+RUN if [ "${AUTH_METHOD}" = "psk" ]; then \
+        mkdir -p /etc/swanctl/swanctl.d; \
+    fi
+COPY ${IPSEC_MODE}/conf/${AUTH_METHOD}/ /tmp/conf/
+RUN if [ "${AUTH_METHOD}" = "psk" ] && [ -f /tmp/conf/secrets.conf ]; then \
+        cp /tmp/conf/secrets.conf /etc/ipsec.secrets; \
+    fi && rm -rf /tmp/conf
+
+# Copy startup script and test server
+COPY env-setup/server-start.sh /usr/local/bin/server-start.sh
+COPY test-conn/test-server.py /usr/local/bin/test-server.py
+RUN chmod +x /usr/local/bin/server-start.sh /usr/local/bin/test-server.py
+
+# Enable IP forwarding
+RUN echo 'net.ipv4.ip_forward = 1' >> /etc/sysctl.conf
+
+# Create systemd directory for charon-systemd
+RUN mkdir -p /var/run
+
+# Expose IPsec ports
+EXPOSE 500/udp 4500/udp 8080/tcp
+
+# Start script
+CMD ["/usr/local/bin/server-start.sh"]

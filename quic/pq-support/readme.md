@@ -28,7 +28,7 @@ openssl x509 -req -in server.csr -CA ca-cert.pem -CAkey ca-key.pem \
     -CAcreateserial -out server-cert.pem -days 365
 
 # Clean up temporary files
-rm *.csr *.crl
+rm *.csr *.srl
 
 cd ..
 ```
