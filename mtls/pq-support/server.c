@@ -97,7 +97,7 @@ void print_cert_info(SSL_CTX *ctx)
 // Print client certificate information
 void print_client_cert_info(SSL *ssl)
 {
-    printf("\n=== Client Certificate ===\n");
+    printf("=== Client Certificate ===\n");
 
     X509 *cert = SSL_get_peer_certificate(ssl);
     if (!cert)
